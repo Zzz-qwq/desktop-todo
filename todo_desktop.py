@@ -158,7 +158,7 @@ class TodoApp:
 
         self.btn_cfg = tk.Button(
             self.title_bar,
-            text="⚙",
+            text="⚙ 设置",
             bg=BG3,
             fg=FG_MUTED,
             relief="flat",
