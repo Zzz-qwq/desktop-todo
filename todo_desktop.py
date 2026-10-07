@@ -7,7 +7,7 @@ import threading
 import tkinter as tk
 import urllib.request
 from tkinter import ttk, font
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_FILE = os.path.join(APP_DIR, "tasks.json")
@@ -16,10 +16,22 @@ ARCHIVE_FILE = os.path.join(APP_DIR, "归档.md")
 DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
 DEEPSEEK_MODEL = "deepseek-chat"
 
+CONFIG_FILE = os.path.join(APP_DIR, "config.json")
+
+
 def read_api_key():
+    """找 API Key，顺序：环境变量 → 本程序目录 config.json → ~/.dsh/.credentials.yaml"""
     env = os.environ.get("DEEPSEEK_API_KEY")
-    if env:
+    if env and env.strip():
         return env.strip()
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                k = (json.load(f).get("deepseek_api_key") or "").strip()
+            if k:
+                return k
+        except Exception:
+            pass
     cred = os.path.join(os.path.expanduser("~"), ".dsh", ".credentials.yaml")
     if os.path.exists(cred):
         try:
@@ -30,6 +42,24 @@ def read_api_key():
         except Exception:
             pass
     return ""
+
+
+def save_api_key(key):
+    """把 key 写进程序目录的 config.json（保留文件里其他字段）；传空字符串则清除"""
+    cfg = {}
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                cfg = json.load(f) or {}
+        except Exception:
+            cfg = {}
+    key = (key or "").strip()
+    if key:
+        cfg["deepseek_api_key"] = key
+    else:
+        cfg.pop("deepseek_api_key", None)
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
 
 BG = "#1e1e2e"
 BG2 = "#27293d"
@@ -125,6 +155,20 @@ class TodoApp:
             command=self.open_archive,
         )
         self.btn_arch.pack(side="right", padx=2, pady=4)
+
+        self.btn_cfg = tk.Button(
+            self.title_bar,
+            text="⚙",
+            bg=BG3,
+            fg=FG_MUTED,
+            relief="flat",
+            activebackground=BG3,
+            activeforeground=FG,
+            cursor="hand2",
+            bd=0,
+            command=self.open_api_dialog,
+        )
+        self.btn_cfg.pack(side="right", padx=2, pady=4)
 
         self.btn_close = tk.Button(
             self.title_bar,
@@ -436,6 +480,9 @@ class TodoApp:
         self.expanded_ids.clear()
         self.save_tasks()
         self.render()
+
+    def open_api_dialog(self):
+        ApiKeyDialog(self)
 
     def open_ai_dialog(self):
         AiDialog(self)
@@ -769,6 +816,64 @@ def days_label(n):
     return f"{n}天"
 
 
+class ApiKeyDialog(tk.Toplevel):
+    """填写 DeepSeek API Key 的小窗口——不用命令行、不用编辑器"""
+
+    def __init__(self, app):
+        super().__init__(app.root)
+        self.app = app
+        self.title("设置")
+        self.configure(bg=BG2)
+        self.attributes("-topmost", True)
+        self.geometry("470x380")
+        self.transient(app.root)
+        self.grab_set()
+
+        def note(txt, fg=FG_MUTED, size=None):
+            tk.Label(self, text=txt, bg=BG2, fg=fg, font=size or app.font_small,
+                     anchor="w", justify="left", wraplength=430).pack(
+                fill="x", padx=16, pady=(7, 0))
+
+        note("DeepSeek API Key（可选）", fg=FG, size=app.font_body)
+        note("· 不填也能用：待办增删改、优先级、到期提醒全部可用；"
+             "点「✨ 整理」时会用本地规则拆分条目、识别日期。")
+        note("· 填上之后，「✨ 整理」改由 AI 处理：合并同类、判优先级、补日期，更贴近原意。")
+        note("· 去哪儿申请：platform.deepseek.com → API keys")
+
+        self.var = tk.StringVar(value=read_api_key())
+        ent = tk.Entry(self, textvariable=self.var, bg=BG3, fg=FG,
+                       insertbackground=FG, relief="flat", font=app.font_small)
+        ent.pack(fill="x", padx=16, pady=(10, 0), ipady=6)
+        ent.focus_set()
+
+        note("Key 只保存在本机 config.json 里，不上传、不进 Git。")
+
+        row = tk.Frame(self, bg=BG2)
+        row.pack(fill="x", padx=16, pady=(14, 4))
+        tk.Button(row, text="保存", bg=ACCENT, fg="#1e1e2e", relief="flat",
+                  font=app.font_small, cursor="hand2", bd=0, padx=18, pady=5,
+                  command=self.save).pack(side="left")
+        tk.Button(row, text="清除", bg=BG3, fg=FG, relief="flat",
+                  font=app.font_small, cursor="hand2", bd=0, padx=14, pady=5,
+                  command=self.clear).pack(side="left", padx=(8, 0))
+        tk.Button(row, text="关闭", bg=BG3, fg=FG, relief="flat",
+                  font=app.font_small, cursor="hand2", bd=0, padx=14, pady=5,
+                  command=self.destroy).pack(side="right")
+
+        self.status = tk.Label(self, text="", bg=BG2, fg=GREEN,
+                               font=app.font_small, anchor="w")
+        self.status.pack(fill="x", padx=16, pady=(2, 12))
+
+    def save(self):
+        save_api_key(self.var.get())
+        self.status.config(text="已保存，下次点「✨ 整理」就走 AI 了", fg=GREEN)
+
+    def clear(self):
+        save_api_key("")
+        self.var.set("")
+        self.status.config(text="已清除，将使用本地规则整理", fg=FG_MUTED)
+
+
 class AiDialog(tk.Toplevel):
     def __init__(self, app):
         super().__init__(app.root)
@@ -782,7 +887,9 @@ class AiDialog(tk.Toplevel):
 
         head = tk.Label(
             self,
-            text="把原始信息粘贴到下面，点击整理，自动提取任务并定优先级",
+            text=("把原始信息粘贴到下面，点击整理，AI 自动提取任务并定优先级"
+                  if read_api_key() else
+                  "把原始信息粘贴到下面，点击整理（未配 API Key，将用本地规则拆分；点主窗口 ⚙ 可填写）"),
             bg=BG2,
             fg=FG,
             font=app.font_small,
@@ -857,10 +964,13 @@ class AiDialog(tk.Toplevel):
 
     def _work(self, raw):
         try:
-            prompt = self._build_prompt(raw)
-            text = call_deepseek(prompt)
-            tasks_in = parse_tasks_json(text)
-            self.app.root.after(0, lambda: self._done(tasks_in))
+            if read_api_key():
+                tasks_in = parse_tasks_json(call_deepseek(self._build_prompt(raw)))
+                note = ""
+            else:
+                tasks_in = local_organize(raw)          # 没配 key：本地规则整理，不联网
+                note = "（未配 API Key，本次为本地规则整理）"
+            self.app.root.after(0, lambda: self._done(tasks_in, note))
         except Exception as e:
             self.app.root.after(0, lambda: self._fail(str(e)))
 
@@ -883,7 +993,7 @@ class AiDialog(tk.Toplevel):
         lines.append(raw)
         return "\n".join(lines)
 
-    def _done(self, tasks_in):
+    def _done(self, tasks_in, note=""):
         self.btn_go.config(state="normal")
         new_n = 0
         repri_n = 0
@@ -924,12 +1034,89 @@ class AiDialog(tk.Toplevel):
         self.app.save_tasks()
         self.app.render()
         self.status.config(
-            text=f"完成：新增 {new_n} 条，重评估 {repri_n} 条，已按优先级重排", fg=GREEN
+            text=f"完成：新增 {new_n} 条，重评估 {repri_n} 条，已按优先级重排{note}", fg=GREEN
         )
 
     def _fail(self, err):
         self.btn_go.config(state="normal")
         self.status.config(text=f"出错：{err}", fg=RED)
+
+
+# ---------------- 本地规则整理（没配 API Key 时的兜底，完全不联网） ----------------
+
+BULLET_RE = re.compile(r"^\s*(?:[-*•·]|\(\d+\)|\d+[.、)）]|[①-⑳]|\[[ xX]?\]|【[^】]{0,8}】)\s*")
+# 出现这些词 → 判为高优先级
+DUE_WORDS = ("截止", "deadline", "最晚", "之前", "前提交", "前完成",
+             "必须", "紧急", "尽快", "重点", "优先", "今晚", "今天")
+# 出现这些词 → 判为低优先级（安排 / 通知 / 信息类，非行动项）
+LOW_WORDS = ("会议", "例会", "周会", "通知", "安排", "提醒", "备忘",
+             "待跟进", "背景", "同步", "知悉", "讨论")
+WEEKDAY_CN = {"一": 0, "二": 1, "三": 2, "四": 3, "五": 4, "六": 5, "日": 6, "天": 6}
+
+
+def _parse_date(s, today):
+    """从一段文字里认日期，返回 YYYY-MM-DD；认不出返回空字符串"""
+    m = re.search(r"(\d{4})-(\d{1,2})-(\d{1,2})", s)
+    if m:
+        try:
+            return date(int(m.group(1)), int(m.group(2)), int(m.group(3))).isoformat()
+        except Exception:
+            return ""
+    m = re.search(r"(\d{1,2})\s*[月/]\s*(\d{1,2})\s*[日号]?", s)
+    if m:
+        try:
+            return date(today.year, int(m.group(1)), int(m.group(2))).isoformat()
+        except Exception:
+            return ""
+    if "大后天" in s:
+        return (today + timedelta(days=3)).isoformat()
+    if "后天" in s:
+        return (today + timedelta(days=2)).isoformat()
+    if "明天" in s or "明日" in s:
+        return (today + timedelta(days=1)).isoformat()
+    if "今天" in s or "今日" in s:
+        return today.isoformat()
+    m = re.search(r"(下+)?(?:周|星期|礼拜)([一二三四五六日天])", s)
+    if m:
+        delta = (WEEKDAY_CN[m.group(2)] - today.weekday()) % 7
+        if m.group(1):
+            delta += 7
+        return (today + timedelta(days=delta)).isoformat()
+    m = re.search(r"(\d+)\s*天后", s)
+    if m:
+        return (today + timedelta(days=int(m.group(1)))).isoformat()
+    return ""
+
+
+def local_organize(raw):
+    """不联网的规则整理：拆行 → 认日期 → 按关键词判优先级。输出结构与 AI 返回一致。"""
+    today = date.today()
+    out, seen = [], set()
+    for line in raw.splitlines():
+        t = BULLET_RE.sub("", line).strip().strip("　 \t")
+        if len(t) < 2:
+            continue
+        if t.endswith(("：", ":")) and len(t) <= 12:   # 像小标题的，跳过
+            continue
+        if t in seen:
+            continue
+        seen.add(t)
+        if any(w in t for w in DUE_WORDS):
+            pri = "高"
+        elif any(w in t for w in LOW_WORDS):
+            pri = "低"
+        else:
+            pri = "中"
+        out.append({
+            "text": t[:120],
+            "priority": pri,
+            "start": "",
+            "due": _parse_date(t, today),
+            "note": "",
+        })
+    order = {"高": 0, "中": 1, "低": 2}
+    out.sort(key=lambda x: order.get(x["priority"], 1))
+    return out
 
 
 def call_deepseek(prompt):
