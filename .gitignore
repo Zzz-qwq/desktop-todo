@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+tasks.json
+归档.md
+debug.log
