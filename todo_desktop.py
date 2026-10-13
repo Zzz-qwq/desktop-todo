@@ -174,7 +174,7 @@ class TodoApp:
             activeforeground=FG,
             cursor="hand2",
             bd=0,
-            command=self.toggle_pin,
+            command=self.toggle_window_pin,
         )
         self.btn_pin.pack(side="right", padx=4, pady=4)
 
@@ -846,7 +846,10 @@ class TodoApp:
             h = max(self.resize_data[3] + dy, 300)
             self.root.geometry(f"{int(w)}x{int(h)}")
 
-    def toggle_pin(self):
+    def toggle_window_pin(self):
+        """标题栏 📌：窗口置顶开关。
+        注意：这个方法以前也叫 toggle_pin，把上面「单个任务置顶」的同名方法覆盖掉了
+        （Python 里后定义的生效），导致右键菜单的「置顶」点了没反应。改名修掉。"""
         self.always_on_top = not self.always_on_top
         self.root.attributes("-topmost", self.always_on_top)
         self.btn_pin.config(text="📌" if self.always_on_top else "📍", fg=ACCENT if self.always_on_top else FG_MUTED)

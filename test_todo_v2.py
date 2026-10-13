@@ -157,6 +157,31 @@ class OfflineDesktopTests(unittest.TestCase):
         self.assertLessEqual(len(items[0]["text"]), 40)     # 标题被精简
         self.assertIn("发出去", items[0]["evidence"])
 
+    def test_task_pin_is_not_shadowed_by_window_pin(self):
+        """回归：toggle_pin 曾被同名方法覆盖（Python 里后定义的生效），
+        导致右键菜单的「📍 置顶」实际调到了不带参数的窗口置顶方法，点了没反应。"""
+        import inspect
+        self.assertEqual(
+            list(inspect.signature(self.td.TodoApp.toggle_pin).parameters),
+            ["self", "task_id"],
+        )
+        self.assertEqual(
+            list(inspect.signature(self.td.TodoApp.toggle_window_pin).parameters),
+            ["self"],
+        )
+
+        class Stub:                      # 用桩对象调真实方法，不建窗口、不碰 tasks.json
+            def __init__(self):
+                self.tasks = [{"id": 1, "pinned": False}]
+            def save_tasks(self): pass
+            def render(self): pass
+
+        s = Stub()
+        self.td.TodoApp.toggle_pin(s, 1)
+        self.assertTrue(s.tasks[0]["pinned"])
+        self.td.TodoApp.toggle_pin(s, 1)
+        self.assertFalse(s.tasks[0]["pinned"])
+
 
 if __name__ == "__main__":
     unittest.main()
