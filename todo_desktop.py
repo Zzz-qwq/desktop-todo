@@ -821,7 +821,7 @@ class ApiKeyDialog(tk.Toplevel):
         self.title("设置")
         self.configure(bg=BG2)
         self.attributes("-topmost", True)
-        self.geometry("470x380")
+        self.geometry("470x560")
         self.transient(app.root)
         self.grab_set()
 
@@ -863,13 +863,62 @@ class ApiKeyDialog(tk.Toplevel):
         tk.Button(row, text="清除", bg=BG3, fg=FG, relief="flat",
                   font=app.font_small, cursor="hand2", bd=0, padx=14, pady=5,
                   command=self.clear).pack(side="left", padx=(8, 0))
-        tk.Button(row, text="关闭", bg=BG3, fg=FG, relief="flat",
-                  font=app.font_small, cursor="hand2", bd=0, padx=14, pady=5,
-                  command=self.destroy).pack(side="right")
-
         self.status = tk.Label(self, text="", bg=BG2, fg=GREEN,
                                font=app.font_small, anchor="w")
         self.status.pack(fill="x", padx=16, pady=(2, 12))
+
+        # ---- 归档文件 ----
+        tk.Frame(self, bg=BG3, height=1).pack(fill="x", padx=16, pady=(0, 0))
+        note("归档文件", fg=FG, size=app.font_body)
+        note("每次勾选完成任务，就往这个文件追加一条记录；同一任务不会重复归档。")
+
+        self.archive_path_var = tk.StringVar(value=ARCHIVE_FILE)
+        path_ent = tk.Entry(
+            self, textvariable=self.archive_path_var, bg=BG3, fg=FG_MUTED,
+            insertbackground=FG, relief="flat", font=app.font_small,
+            state="readonly", readonlybackground=BG3,
+        )
+        path_ent.pack(fill="x", padx=16, pady=(6, 0), ipady=5)
+        # 只读 Entry 也能选中复制：点一下就全选
+        path_ent.bind("<FocusIn>", lambda e: path_ent.select_range(0, "end"))
+
+        arow = tk.Frame(self, bg=BG2)
+        arow.pack(fill="x", padx=16, pady=(8, 12))
+        tk.Button(arow, text="打开文件", bg=BG3, fg=FG, relief="flat",
+                  font=app.font_small, cursor="hand2", bd=0, padx=14, pady=5,
+                  command=self.open_archive_file).pack(side="left")
+        tk.Button(arow, text="打开所在文件夹", bg=BG3, fg=FG, relief="flat",
+                  font=app.font_small, cursor="hand2", bd=0, padx=14, pady=5,
+                  command=self.open_archive_folder).pack(side="left", padx=(8, 0))
+        tk.Button(arow, text="关闭", bg=BG3, fg=FG, relief="flat",
+                  font=app.font_small, cursor="hand2", bd=0, padx=14, pady=5,
+                  command=self.destroy).pack(side="right")
+
+    def open_archive_file(self):
+        """打开归档文件本身"""
+        try:
+            ensure_archive_file(ARCHIVE_FILE)
+            if os.name == "nt":
+                os.startfile(ARCHIVE_FILE)
+            elif os.sys.platform == "darwin":
+                subprocess.Popen(["open", ARCHIVE_FILE])
+            else:
+                subprocess.Popen(["xdg-open", ARCHIVE_FILE])
+        except OSError as exc:
+            self.status.config(text="打开归档失败：" + str(exc), fg=RED)
+
+    def open_archive_folder(self):
+        """打开归档文件所在的文件夹，并把它选中"""
+        try:
+            path = os.path.normpath(ARCHIVE_FILE)
+            if os.name == "nt":
+                subprocess.Popen('explorer /select,"%s"' % path)
+            elif os.sys.platform == "darwin":
+                subprocess.Popen(["open", "-R", path])
+            else:
+                subprocess.Popen(["xdg-open", os.path.dirname(path)])
+        except OSError as exc:
+            self.status.config(text="打开文件夹失败：" + str(exc), fg=RED)
 
     def save(self):
         save_api_key(self.var.get())
