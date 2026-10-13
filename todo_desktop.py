@@ -837,9 +837,20 @@ class ApiKeyDialog(tk.Toplevel):
         note("· 去哪儿申请：platform.deepseek.com → API keys")
 
         self.var = tk.StringVar(value=read_api_key())
-        ent = tk.Entry(self, textvariable=self.var, bg=BG3, fg=FG,
-                       insertbackground=FG, relief="flat", font=app.font_small)
-        ent.pack(fill="x", padx=16, pady=(10, 0), ipady=6)
+        # 默认遮罩：设置窗口很可能在演示/录屏里被打开，明文显示 key 会直接泄出去。
+        self.show_key = tk.BooleanVar(value=False)
+        key_row = tk.Frame(self, bg=BG2)
+        key_row.pack(fill="x", padx=16, pady=(10, 0))
+        ent = tk.Entry(key_row, textvariable=self.var, bg=BG3, fg=FG,
+                       insertbackground=FG, relief="flat", font=app.font_small,
+                       show="•")
+        ent.pack(side="left", fill="x", expand=True, ipady=6)
+        tk.Checkbutton(
+            key_row, text="显示", variable=self.show_key,
+            command=lambda: ent.config(show="" if self.show_key.get() else "•"),
+            bg=BG2, fg=FG_MUTED, selectcolor=BG3, activebackground=BG2,
+            activeforeground=FG, font=app.font_small, bd=0, highlightthickness=0,
+        ).pack(side="left", padx=(6, 0))
         ent.focus_set()
 
         note("Key 只保存在本机 config.json 里，不上传、不进 Git。")
