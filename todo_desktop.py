@@ -68,16 +68,24 @@ def save_api_key(key):
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
 
-BG = "#1e1e2e"
-BG2 = "#27293d"
-BG3 = "#313244"
-FG = "#cdd6f4"
-FG_MUTED = "#7f849c"
-ACCENT = "#cba6f7"
-GREEN = "#a6e3a1"
-RED = "#f38ba8"
-YELLOW = "#f9e2af"
-BLUE = "#89b4fa"
+# ---- Soft Dark 调色板（v2.2）----
+# 低对比深色、轻量分层：BG 最暗作底，BG2 是任务区域，BG3 再亮一层（兼作分割线）。
+BG = "#1B1F27"
+BG2 = "#292F3A"
+BG3 = "#353B46"
+FG = "#EEF2F7"
+FG_MUTED = "#A6AFBD"
+ACCENT = "#89B4FA"
+GREEN = "#A6DA95"
+# 优先级三色刻意压低饱和度，含义不变（高/中/低），但不抢主文字。
+RED = "#E78284"
+YELLOW = "#E5C07B"
+BLUE = "#7FB4CA"
+
+# 强调色块上的文字 / 强调色的按下态
+ON_ACCENT = "#1B1F27"
+ACCENT_ACTIVE = "#A6C8FF"
+LINE = BG3
 
 
 class TodoApp:
@@ -111,7 +119,42 @@ class TodoApp:
         h = self.root.winfo_screenheight()
         self.root.geometry(f"+{w - 410}+{h - 600}")
 
+    def _style_ttk(self):
+        """ttk 控件默认跟系统主题走（浅色），在深色窗口里非常突兀，这里显式覆盖。
+        注意：没配 ttk 样式前，v2.1 的优先级下拉框是「白底黑字」，一眼出戏。"""
+        style = ttk.Style()
+        try:
+            style.theme_use("clam")   # vista 主题下 fieldbackground 根本改不动，必须换主题
+        except tk.TclError:
+            pass
+        style.configure(
+            "TCombobox",
+            fieldbackground=BG3, background=BG3, foreground=FG,
+            arrowcolor=FG_MUTED, bordercolor=BG3,
+            lightcolor=BG3, darkcolor=BG3,
+            selectbackground=BG3, selectforeground=FG,
+            padding=(8, 4),
+        )
+        style.map(
+            "TCombobox",
+            fieldbackground=[("readonly", BG3), ("active", BG3)],
+            foreground=[("readonly", FG)],
+            arrowcolor=[("active", ACCENT)],
+        )
+        style.configure(
+            "Vertical.TScrollbar",
+            background=BG3, troughcolor=BG, bordercolor=BG,
+            arrowcolor=FG_MUTED, lightcolor=BG3, darkcolor=BG3,
+        )
+        style.map("Vertical.TScrollbar", background=[("active", FG_MUTED)])
+        # 下拉候选列表是原生 Listbox，不吃 ttk 样式，只能走 option 数据库
+        self.root.option_add("*TCombobox*Listbox.background", BG3)
+        self.root.option_add("*TCombobox*Listbox.foreground", FG)
+        self.root.option_add("*TCombobox*Listbox.selectBackground", ACCENT)
+        self.root.option_add("*TCombobox*Listbox.selectForeground", ON_ACCENT)
+
     def build_ui(self):
+        self._style_ttk()
         self.title_bar = tk.Frame(self.root, bg=BG3, height=38)
         self.title_bar.pack(fill="x")
         self.title_bar.pack_propagate(False)
@@ -184,7 +227,7 @@ class TodoApp:
             fg=FG_MUTED,
             relief="flat",
             activebackground=RED,
-            activeforeground="#ffffff",
+            activeforeground="#FFFFFF",
             cursor="hand2",
             bd=0,
             command=self.root.destroy,
@@ -243,11 +286,11 @@ class TodoApp:
             self.input_frame,
             text="＋",
             bg=ACCENT,
-            fg="#1e1e2e",
+            fg=ON_ACCENT,
             relief="flat",
             font=self.font_body,
-            activebackground="#b4befe",
-            activeforeground="#1e1e2e",
+            activebackground=ACCENT_ACTIVE,
+            activeforeground=ON_ACCENT,
             cursor="hand2",
             bd=0,
             width=3,
@@ -445,10 +488,10 @@ class TodoApp:
             btn_frame,
             text="保存",
             bg=ACCENT,
-            fg="#1e1e2e",
+            fg=ON_ACCENT,
             relief="flat",
-            activebackground="#b4befe",
-            activeforeground="#1e1e2e",
+            activebackground=ACCENT_ACTIVE,
+            activeforeground=ON_ACCENT,
             cursor="hand2",
             bd=0,
             font=self.font_small,
@@ -580,6 +623,12 @@ class TodoApp:
             text_font = self.font_strike if t["done"] else self.font_body
             text_color = FG_MUTED if t["done"] else FG
 
+            # 布局顺序很关键：右侧的小按钮要「先占位」，任务文字最后 pack 去填剩下的空间。
+            # v2.1 是把文字标签先 pack 了的，长标题一换行就把 ✎ / ✕ 挤成 0 宽度
+            # （右侧按钮整排消失）——这是这次要修的可读性问题。
+            def _bind_menu(w):
+                w.bind("<Button-3>", lambda e, tid=t["id"]: self.show_context_menu(e, tid))
+
             pri_lbl = tk.Label(
                 card,
                 text=self.priority_icon(t["priority"]),
@@ -587,8 +636,8 @@ class TodoApp:
                 fg=self.priority_color(t["priority"]),
                 font=self.font_small,
             )
-            pri_lbl.pack(side="left", padx=(8, 4), pady=6)
-            pri_lbl.bind("<Button-3>", lambda e, tid=t["id"]: self.show_context_menu(e, tid))
+            _bind_menu(pri_lbl)
+            pri_lbl.pack(side="left", padx=(10, 6), pady=7)
 
             check_var = tk.StringVar(value="☑" if t["done"] else "☐")
             check_btn = tk.Button(
@@ -603,74 +652,45 @@ class TodoApp:
                 font=self.font_body,
                 command=lambda tid=t["id"]: self.toggle_done(tid),
             )
-            check_btn.pack(side="left", padx=(0, 2), pady=6)
+            check_btn.pack(side="left", padx=(0, 2), pady=7)
 
-            text_lbl = tk.Label(
-                card,
-                text=t["text"],
-                bg=BG2,
-                fg=text_color,
-                font=text_font,
-                anchor="w",
-                justify="left",
-                wraplength=180,
-            )
-            text_lbl.pack(side="left", fill="x", expand=True, pady=6)
-            text_lbl.bind("<Button-3>", lambda e, tid=t["id"]: self.show_context_menu(e, tid))
-            text_lbl.bind("<Button-1>", lambda e, tid=t["id"]: self.toggle_expand(tid))
-            expansion_c = False
+            # 右侧控件按「从右往左」的顺序进列表：先 pack 的在最右边
+            right_side = []
+
             if t.get("pinned"):
-                pin_lbl = tk.Label(
-                    card,
-                    text="📍",
-                    bg=BG2,
-                    fg=ACCENT,
-                    font=self.font_small,
-                )
-                pin_lbl.pack(side="right", padx=(0, 4), pady=6)
-                pin_lbl.bind("<Button-3>", lambda e, tid=t["id"]: self.show_context_menu(e, tid))
-                expansion_c = True
+                pin_lbl = tk.Label(card, text="📍", bg=BG2, fg=ACCENT, font=self.font_small)
+                _bind_menu(pin_lbl)
+                right_side.append((pin_lbl, (0, 4)))
+
             if t.get("note") or t.get("start") or t.get("due") or t.get("priority"):
-                expand_mark = "▾" if t["id"] in self.expanded_ids else "▸"
                 expand_lbl = tk.Label(
                     card,
-                    text=expand_mark,
+                    text="▾" if t["id"] in self.expanded_ids else "▸",
                     bg=BG2,
                     fg=FG_MUTED,
                     font=self.font_small,
                     cursor="hand2",
                 )
-                expand_lbl.pack(side="right", padx=(0, 6), pady=6)
                 expand_lbl.bind("<Button-1>", lambda e, tid=t["id"]: self.toggle_expand(tid))
-                expansion_c = True
-            if not expansion_c:
-                spacer = tk.Label(card, text="", bg=BG2, width=2)
-                spacer.pack(side="right", padx=(0, 4), pady=6)
+                right_side.append((expand_lbl, (0, 6)))
 
             start_text = self.start_label(t.get("start", ""))
             if start_text:
                 start_lbl = tk.Label(
-                    card,
-                    text=f"🕐{start_text}",
-                    bg=BG2,
-                    fg=GREEN,
-                    font=self.font_small,
+                    card, text=f"🕐{start_text}", bg=BG2, fg=GREEN, font=self.font_small,
                 )
-                start_lbl.pack(side="right", padx=(4, 0), pady=6)
-                start_lbl.bind("<Button-3>", lambda e, tid=t["id"]: self.show_context_menu(e, tid))
+                _bind_menu(start_lbl)
+                right_side.append((start_lbl, (4, 0)))
 
             due_text = self.due_label(t.get("due", ""))
             if due_text:
                 overdue = due_text.startswith("逾期") and not t["done"]
                 due_lbl = tk.Label(
-                    card,
-                    text=f"⏰{due_text}",
-                    bg=BG2,
-                    fg=RED if overdue else FG_MUTED,
-                    font=self.font_small,
+                    card, text=f"⏰{due_text}", bg=BG2,
+                    fg=RED if overdue else FG_MUTED, font=self.font_small,
                 )
-                due_lbl.pack(side="right", padx=(4, 8), pady=6)
-                due_lbl.bind("<Button-3>", lambda e, tid=t["id"]: self.show_context_menu(e, tid))
+                _bind_menu(due_lbl)
+                right_side.append((due_lbl, (4, 8)))
 
             del_btn = tk.Button(
                 card,
@@ -685,7 +705,7 @@ class TodoApp:
                 font=self.font_small,
                 command=lambda tid=t["id"]: self.delete_task(tid),
             )
-            del_btn.pack(side="right", padx=(0, 6), pady=6)
+            right_side.append((del_btn, (0, 6)))
 
             edit_btn = tk.Button(
                 card,
@@ -700,7 +720,31 @@ class TodoApp:
                 font=self.font_small,
                 command=lambda tid=t["id"]: self.edit_task(tid),
             )
-            edit_btn.pack(side="right", padx=(0, 2), pady=6)
+            right_side.append((edit_btn, (0, 2)))
+
+            for widget, pad in right_side:
+                widget.pack(side="right", padx=pad, pady=7)
+
+            text_lbl = tk.Label(
+                card,
+                text=t["text"],
+                bg=BG2,
+                fg=text_color,
+                font=text_font,
+                anchor="w",
+                justify="left",
+                wraplength=200,
+            )
+            _bind_menu(text_lbl)
+            text_lbl.bind("<Button-1>", lambda e, tid=t["id"]: self.toggle_expand(tid))
+            text_lbl.pack(side="left", fill="x", expand=True, pady=7)
+
+            def _autowrap(ev, lbl=text_lbl):
+                """让换行宽度跟着标签实际拿到的宽度走——固定 180px 会把长标题挤成好几行。"""
+                want = max(90, ev.width - 8)
+                if abs(int(lbl.cget("wraplength")) - want) > 2:
+                    lbl.configure(wraplength=want)
+            text_lbl.bind("<Configure>", _autowrap)
 
             if t["id"] in self.expanded_ids:
                 detail = tk.Frame(row, bg=BG3)
@@ -857,7 +901,7 @@ class ApiKeyDialog(tk.Toplevel):
 
         row = tk.Frame(self, bg=BG2)
         row.pack(fill="x", padx=16, pady=(14, 4))
-        tk.Button(row, text="保存", bg=ACCENT, fg="#1e1e2e", relief="flat",
+        tk.Button(row, text="保存", bg=ACCENT, fg=ON_ACCENT, relief="flat",
                   font=app.font_small, cursor="hand2", bd=0, padx=18, pady=5,
                   command=self.save).pack(side="left")
         tk.Button(row, text="清除", bg=BG3, fg=FG, relief="flat",
@@ -1008,7 +1052,7 @@ class AiDialog(tk.Toplevel):
         btn = tk.Frame(self, bg=BG2)
         btn.pack(fill="x", padx=12, pady=(0, 10))
         self.btn_go = tk.Button(
-            btn, text="✨ 整理", bg=ACCENT, fg="#1e1e2e", relief="flat",
+            btn, text="✨ 整理", bg=ACCENT, fg=ON_ACCENT, relief="flat",
             font=app.font_small, cursor="hand2", bd=0, padx=16, pady=4,
             command=self.run_ai,
         )
