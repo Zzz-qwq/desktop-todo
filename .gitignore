@@ -1,6 +1,15 @@
 __pycache__/
 *.pyc
-tasks.json
-归档.md
 debug.log
+
+# ---- 用户数据：只在本机，永不进仓库 ----
+tasks.json
+tasks.json.bak
+归档.md
 config.json
+
+# ---- 升级/备份产生的目录：含数据快照和源码副本，不进仓库 ----
+_v2*备份*/
+_v21*备份*/
+todo_backup_before_v2_*/
+dist/

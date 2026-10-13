@@ -8,6 +8,13 @@ import tkinter as tk
 import urllib.request
 from tkinter import ttk, font
 from datetime import datetime, date, timedelta
+from tkinter import messagebox
+from todo_v2_core import (load_tasks_safely, save_tasks_atomically,
+    archive_completed_task, ensure_archive_file,
+    EXTRACT_SYSTEM_PROMPT, build_extraction_user_prompt, parse_extraction_result,
+    VIEW_UNKNOWN, VIEW_OPTIONS)
+from todo_v2_review import CandidateReviewDialog
+# TODO_V2_PATCHED_2026_10
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_FILE = os.path.join(APP_DIR, "tasks.json")
@@ -296,18 +303,10 @@ class TodoApp:
             self.bind_mousewheel(child)
 
     def load_tasks(self):
-        if not os.path.exists(DATA_FILE):
-            return []
-        try:
-            with open(DATA_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return []
+        return load_tasks_safely(DATA_FILE)
 
     def save_tasks(self):
-        with open(DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump(self.tasks, f, ensure_ascii=False, indent=2)
-
+        save_tasks_atomically(DATA_FILE, self.tasks)
     def add_task(self):
         text = self.entry.get().strip()
         if not text:
@@ -356,34 +355,29 @@ class TodoApp:
             return False
 
     def toggle_done(self, task_id):
-        for t in self.tasks:
-            if t["id"] == task_id:
-                t["done"] = not t["done"]
-                if t["done"]:
-                    self.archive_task(t)
-                break
-        self.save_tasks()
-        self.render()
+        for task in self.tasks:
+            if task["id"] != task_id:
+                continue
+            if task.get("done"):
+                task["done"] = False
+            else:
+                try:
+                    archive_completed_task(ARCHIVE_FILE, task)
+                except OSError as exc:
+                    messagebox.showerror("归档失败", "任务未标记完成，归档写入失败：" + str(exc), parent=self.root)
+                    return
+                task["done"] = True
+            try:
+                self.save_tasks()
+            except Exception as exc:
+                messagebox.showerror("保存失败", str(exc), parent=self.root)
+                return
+            self.render()
+            break
 
-    def archive_task(self, t):
-        try:
-            now = datetime.now()
-            head = f"\n## {now.strftime('%Y-%m-%d')}\n"
-            line = f"- [x] {t['text']} ｜ 优先级：{t.get('priority', '中')}"
-            if t.get("due"):
-                line += f" ｜ 截止：{t['due']}"
-            if t.get("start"):
-                line += f" ｜ 开始：{t['start']}"
-            line += f" ｜ 完成于 {now.strftime('%H:%M')}\n"
-            if not os.path.exists(ARCHIVE_FILE):
-                with open(ARCHIVE_FILE, "w", encoding="utf-8") as f:
-                    f.write("# 桌面待办 · 归档\n")
-            with open(ARCHIVE_FILE, "a", encoding="utf-8") as f:
-                f.write(head + line)
-            self.flash_status(f"已归档：{t['text'][:20]}")
-        except OSError:
-            self.flash_status("归档写入失败，请检查 E:\工作 权限")
-
+    def archive_task(self, task):
+        """保留旧方法名，供已有脚本调用；实际写入由安全归档函数处理。"""
+        return archive_completed_task(ARCHIVE_FILE, task)
     def toggle_expand(self, task_id):
         if task_id in self.expanded_ids:
             self.expanded_ids.discard(task_id)
@@ -489,13 +483,15 @@ class TodoApp:
 
     def open_archive(self):
         try:
+            ensure_archive_file(ARCHIVE_FILE)
             if os.name == "nt":
                 os.startfile(ARCHIVE_FILE)
+            elif os.sys.platform == "darwin":
+                subprocess.Popen(["open", ARCHIVE_FILE])
             else:
                 subprocess.Popen(["xdg-open", ARCHIVE_FILE])
-        except OSError:
-            self.flash_status("无法打开归档文件")
-
+        except OSError as exc:
+            messagebox.showerror("无法打开归档", str(exc), parent=self.root)
     def change_priority(self, task_id, value):
         for t in self.tasks:
             if t["id"] == task_id:
@@ -881,7 +877,7 @@ class AiDialog(tk.Toplevel):
         self.title("✨ AI 自动整理")
         self.configure(bg=BG2)
         self.attributes("-topmost", True)
-        self.geometry("460x520")
+        self.geometry("470x560")
         self.transient(app.root)
         self.grab_set()
 
@@ -902,12 +898,34 @@ class AiDialog(tk.Toplevel):
         tk.Label(
             name_row, text="任务归属人", bg=BG2, fg=FG, font=app.font_small,
         ).pack(side="left")
-        self.owner_var = tk.StringVar(value="我")
+        self.owner_var = tk.StringVar(value="")
         self.owner_entry = tk.Entry(
             name_row, textvariable=self.owner_var, bg=BG3, fg=FG,
             insertbackground=FG, relief="flat", font=app.font_small, width=12,
         )
         self.owner_entry.pack(side="left", padx=(6, 0))
+        date_row = tk.Frame(self, bg=BG2)
+        date_row.pack(fill="x", padx=12, pady=(0, 5))
+        tk.Label(date_row, text="原消息日期（可选）", bg=BG2, fg=FG,
+                 font=app.font_small).pack(side="left")
+        self.message_date_var = tk.StringVar(value="")
+        tk.Entry(date_row, textvariable=self.message_date_var, bg=BG3, fg=FG,
+                 insertbackground=FG, relief="flat", width=14).pack(side="left", padx=6)
+        tk.Label(date_row, text="YYYY-MM-DD；不填则不换算相对时间",
+                 bg=BG2, fg=FG_MUTED, font=app.font_small).pack(side="left")
+
+        # v2.1 消息视角：决定「你/我」怎么对应到人。未知视角下不敢猜的责任会交给你确认。
+        view_row = tk.Frame(self, bg=BG2)
+        view_row.pack(fill="x", padx=12, pady=(0, 5))
+        tk.Label(view_row, text="消息视角", bg=BG2, fg=FG,
+                 font=app.font_small).pack(side="left")
+        self.view_var = tk.StringVar(value=VIEW_UNKNOWN)
+        for val, lab in VIEW_OPTIONS:
+            tk.Radiobutton(
+                view_row, text=lab, variable=self.view_var, value=val,
+                bg=BG2, fg=FG, selectcolor=BG3, font=app.font_small,
+                activebackground=BG2, activeforeground=FG,
+            ).pack(side="left", padx=(6, 0))
 
         self.box = tk.Text(
             self,
@@ -921,19 +939,10 @@ class AiDialog(tk.Toplevel):
         )
         self.box.pack(fill="both", expand=True, padx=12, pady=(0, 8))
 
-        self.opt_mode = tk.StringVar(value="both")
         opt = tk.Frame(self, bg=BG2)
         opt.pack(fill="x", padx=12, pady=(0, 4))
-        for val, lab in [
-            ("new", "只生成新任务"),
-            ("repri", "重新评估现有任务优先级"),
-            ("both", "两者都要"),
-        ]:
-            tk.Radiobutton(
-                opt, text=lab, variable=self.opt_mode, value=val,
-                bg=BG2, fg=FG, selectcolor=BG3, font=app.font_small,
-                activebackground=BG2, activeforeground=FG,
-            ).pack(side="left", padx=(0, 10))
+        tk.Label(opt, text="v2：仅提取新任务，先人工确认；旧任务优先级不自动修改",
+                 bg=BG2, fg=FG_MUTED, font=app.font_small).pack(side="left")
         self.box.bind("<Control-Return>", lambda e: self.run_ai())
 
         btn = tk.Frame(self, bg=BG2)
@@ -955,88 +964,47 @@ class AiDialog(tk.Toplevel):
 
     def run_ai(self):
         raw = self.box.get("1.0", "end-1c").strip()
+        owner = self.owner_var.get().strip()
+        msg_date = self.message_date_var.get().strip()
+        view = self.view_var.get()
         if not raw:
             self.status.config(text="请先粘贴原始信息", fg=RED)
             return
-        self.btn_go.config(state="disabled")
-        self.status.config(text="AI 整理中…", fg=FG_MUTED)
-        threading.Thread(target=self._work, args=(raw,), daemon=True).start()
-
-    def _work(self, raw):
         try:
-            if read_api_key():
-                tasks_in = parse_tasks_json(call_deepseek(self._build_prompt(raw)))
-                note = ""
+            prompt = build_extraction_user_prompt(owner, raw, msg_date, view)
+        except ValueError as exc:
+            self.status.config(text=str(exc), fg=RED)
+            return
+        using_ai = bool(read_api_key())
+        self.btn_go.config(state="disabled")
+        self.status.config(text="AI 识别中…" if using_ai else "离线拆分中…", fg=FG_MUTED)
+        threading.Thread(target=self._work, args=(raw, prompt, msg_date, using_ai), daemon=True).start()
+
+    def _work(self, raw, prompt, msg_date, using_ai):
+        try:
+            if using_ai:
+                reply = call_deepseek(prompt)
+                candidates = parse_extraction_result(reply, raw, msg_date)
             else:
-                tasks_in = local_organize(raw)          # 没配 key：本地规则整理，不联网
-                note = "（未配 API Key，本次为本地规则整理）"
-            self.app.root.after(0, lambda: self._done(tasks_in, note))
-        except Exception as e:
-            self.app.root.after(0, lambda: self._fail(str(e)))
+                # Rule-based offline fallback cannot infer owner; do not pretend that it can.
+                items = local_organize(raw)
+                candidates = {"confirmed_tasks": [], "needs_confirmation": []}
+                for item in items:
+                    candidates["needs_confirmation"].append({
+                        "text": item.get("text", ""), "priority": item.get("priority", "中"),
+                        "due": item.get("due", ""), "deadline_raw": "",
+                        "evidence": item.get("evidence", item.get("text", "")),
+                        "note": "", "reason": "离线规则仅能拆分文本，无法确定负责人"})
+            self.after(0, lambda: self._show_review(candidates, using_ai))
+        except Exception as exc:
+            error = str(exc)
+            self.after(0, lambda: self._fail(error))
 
-    def _build_prompt(self, raw):
-        mode = self.opt_mode.get()
-        owner = self.owner_var.get().strip() or "我"
-        lines = []
-        lines.append(f"任务归属人：{owner}。请以 {owner} 为视角，提取他本人负责、参与或需要完成的【任务】以及与 {owner} 相关的【安排/信息类事项】（如会议、通知、待跟进、事务背景）。{owner} 未参与、与其无关的内容不输出；优先提取涉及 {owner} 的部分。")
-        if mode in ("repri", "both"):
-            lines.append("当前全部任务列表（含已完成；done=true 表示已完成，pinned=true 表示已置顶、优先级不可动，id 供你对应）：")
-            for t in self.app.tasks:
-                lines.append(
-                    f"- id={t['id']} done={str(bool(t.get('done', False))).lower()} "
-                    f"pinned={str(bool(t.get('pinned', False))).lower()} "
-                    f"text={t['text']} priority={t['priority']} "
-                    f"start={t.get('start', '') or '-'} due={t.get('due', '') or '-'}"
-                )
-            lines.append("")
-        lines.append("以下是需要处理的信息：")
-        lines.append(raw)
-        return "\n".join(lines)
-
-    def _done(self, tasks_in, note=""):
+    def _show_review(self, candidates, using_ai):
         self.btn_go.config(state="normal")
-        new_n = 0
-        repri_n = 0
-        for item in tasks_in:
-            rid = item.get("id")
-            text = str(item.get("text", "")).strip()
-            if not text and rid is None:
-                continue
-            if rid is not None:
-                t = next((x for x in self.app.tasks if x["id"] == rid), None)
-                if t and not t.get("pinned", False):
-                    if item.get("priority"):
-                        t["priority"] = str(item["priority"]).strip() or t["priority"]
-                    if item.get("due"):
-                        new_due = str(item["due"]).strip()
-                        if self.app.valid_date(new_due):
-                            t["due"] = new_due
-                    if item.get("start"):
-                        new_start = str(item["start"]).strip()
-                        if self.app.valid_date(new_start):
-                            t["start"] = new_start
-                    if item.get("note"):
-                        t["note"] = str(item["note"]).strip()
-                    repri_n += 1
-                elif t:
-                    repri_n += 1
-            else:
-                self.app.tasks.append(self.app.build_task(text, item))
-                new_n += 1
-        order_map = {"高": 0, "中": 1, "低": 2}
-        pinned = [t for t in self.app.tasks if not t["done"] and t.get("pinned")]
-        active = [t for t in self.app.tasks if not t["done"] and not t.get("pinned")]
-        done_list = [t for t in self.app.tasks if t["done"]]
-        active.sort(key=lambda t: (order_map.get(t["priority"], 9), t.get("due", "")))
-        done_list.sort(key=lambda t: t["id"], reverse=True)
-        self.app.tasks = pinned + active + done_list
-
-        self.app.save_tasks()
-        self.app.render()
-        self.status.config(
-            text=f"完成：新增 {new_n} 条，重评估 {repri_n} 条，已按优先级重排{note}", fg=GREEN
-        )
-
+        n = len(candidates["confirmed_tasks"]) + len(candidates["needs_confirmation"])
+        self.status.config(text=f"识别到 {n} 项候选；审核后才会加入待办", fg=GREEN)
+        CandidateReviewDialog(self.app, candidates, "ai" if using_ai else "local", self.owner_var.get().strip())
     def _fail(self, err):
         self.btn_go.config(state="normal")
         self.status.config(text=f"出错：{err}", fg=RED)
@@ -1088,6 +1056,26 @@ def _parse_date(s, today):
     return ""
 
 
+# 离线模式没有语义能力，标题只能机械精简：先去掉开头的「@某人…：」，
+# 再在 limit 内找最后一个句末标点／逗号断开，都没有就硬截。
+# 截掉的信息不会丢——完整原文会进「原文依据」备注。
+TITLE_LIMIT = 40
+_MENTION_PREFIX_RE = re.compile(r"^\s*@[^：:\n]{1,20}?[：:]\s*")
+_SENT_END_RE = re.compile(r"[。；！？!?;]")
+_CLAUSE_END_RE = re.compile(r"[，,、]")
+
+
+def _short_title(text, limit=TITLE_LIMIT):
+    t = _MENTION_PREFIX_RE.sub("", text.strip())
+    if len(t) <= limit:
+        return t
+    for pattern in (_SENT_END_RE, _CLAUSE_END_RE):
+        cuts = [m.start() for m in pattern.finditer(t) if 6 <= m.start() <= limit]
+        if cuts:
+            return t[: max(cuts)]
+    return t[:limit] + "…"
+
+
 def local_organize(raw):
     """不联网的规则整理：拆行 → 认日期 → 按关键词判优先级。输出结构与 AI 返回一致。"""
     today = date.today()
@@ -1108,11 +1096,12 @@ def local_organize(raw):
         else:
             pri = "中"
         out.append({
-            "text": t[:120],
+            "text": _short_title(t),
             "priority": pri,
             "start": "",
             "due": _parse_date(t, today),
             "note": "",
+            "evidence": t,          # 完整原文，进审核窗的「原文依据」，精简掉的不丢
         })
     order = {"高": 0, "中": 1, "低": 2}
     out.sort(key=lambda x: order.get(x["priority"], 1))
@@ -1126,47 +1115,20 @@ def call_deepseek(prompt):
     payload = {
         "model": DEEPSEEK_MODEL,
         "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "你是任务整理助手。用户会给你一段原始信息（可能含任务、会议纪要、聊天记录、邮件原始文本），并指定一个\"任务归属人\"。"
-                    "请：\n"
-                    "1. 以归属人为视角，把他本人负责、参与或需要完成的【任务】以及与归属人相关的【安排】"
-                    "（如会议、通知、事务背景、开放事项、待跟进事项）都提取为一条条清单项。"
-                    "同一件事、同一批次的零散子项合并成一条更完整项，不要拆太细，控制在最精简的条数；"
-                    "归属人并未参与、与其完全无关的内容不输出。\n"
-                    "2. 每一条项：若是需要归属人行动的【任务】，按其内容重要度给 高/中/低 优先级；"
-                    "若是【安排/通知/信息类】非行动项，自动降为 低 优先级。"
-                    "将合并后的项按优先级从高到低排序，并逐一给出 高/中/低 优先级（最重要的给高，可暂缓、事务性的给低）；\n"
-                    "3. 若提供现有任务列表做重评估：把所有任务（含已完成）当作整体上下文考虑——"
-                    "已完成的任务（done=true）不要输出也不要改动；已置顶的任务（pinned=true）优先级固定、不要输出也不要改动；"
-                    "只基于新信息重新判断其余未完成任务每条的优先级与排序，id 必须对应；\n"
-                    "4. 输出纯 JSON 数组，不要 Markdown 代码块，不要多余文字。数组顺序即展示顺序（最重要的在最前）。每个元素形如：\n"
-                    "{\"id\": 数字或省略, \"text\": \"合并精简后的项文本\", \"priority\": \"高|中|低\", "
-                    "\"start\": \"YYYY-MM-DD或空\", \"due\": \"YYYY-MM-DD或空\", "
-                    "\"note\": \"保留该项对应的原文摘录或备注\"}\n"
-                    "规则：text 用简体中文、完整可读、尽量合并同类；只依据信息里出现的日期，不要编造；"
-                    "没把握的优先级给中；id 仅用于重评估现有任务，新任务不要带 id。"
-                ),
-            },
+            {"role": "system", "content": EXTRACT_SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
         ],
-        "temperature": 0.2,
+        "temperature": 0.1,
         "max_tokens": 4000,
     }
     req = urllib.request.Request(
         DEEPSEEK_API_URL,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {key}",
-        },
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
     )
     with urllib.request.urlopen(req, timeout=120) as resp:
         body = json.loads(resp.read().decode("utf-8"))
     return body["choices"][0]["message"]["content"]
-
-
 def parse_tasks_json(text):
     text = re.sub(r"^```(?:json)?\s*", "", text.strip(), flags=re.MULTILINE)
     text = re.sub(r"\s*```$", "", text.strip(), flags=re.MULTILINE)
@@ -1186,9 +1148,12 @@ def parse_tasks_json(text):
 
 def main():
     root = tk.Tk()
-    app = TodoApp(root)
+    try:
+        app = TodoApp(root)
+    except Exception as exc:
+        messagebox.showerror("Todo 启动失败（任务数据未被覆盖）", str(exc), parent=root)
+        root.destroy()
+        return
     root.mainloop()
-
-
 if __name__ == "__main__":
     main()
