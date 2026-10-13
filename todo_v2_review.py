@@ -4,13 +4,13 @@ import re
 import tkinter as tk
 from tkinter import messagebox, ttk
 from datetime import date
-from todo_v2_core import equivalent_title
+from todo_v2_core import equivalent_title, VIEW_UNKNOWN
 
 
 class CandidateReviewDialog(tk.Toplevel):
     """AI does NOT insert tasks until the user explicitly selects and confirms them."""
 
-    def __init__(self, app, result, mode, owner):
+    def __init__(self, app, result, mode, owner, perspective=VIEW_UNKNOWN):
         super().__init__(app.root)
         self.app = app
         self.rows = []
@@ -25,11 +25,31 @@ class CandidateReviewDialog(tk.Toplevel):
         heading = "AI 提取结果 · 先确认再保存" if mode == "ai" else "离线逐行整理 · 需要逐项确认"
         tk.Label(self, text=heading, font=("Microsoft YaHei UI", 12, "bold"),
                  bg=color_bg, fg=color_text).pack(fill="x", padx=14, pady=(14, 5))
-        help_text = ("有原文依据的明确任务默认勾选；待确认事项默认不勾选。"
-                     if mode == "ai" else
-                     "离线模式无法判断负责人或理解语义；以下仅是原文片段，全部默认不勾选。")
-        tk.Label(self, text=help_text, bg=color_bg, fg="#a6adc8", anchor="w",
-                 wraplength=630).pack(fill="x", padx=14, pady=(0, 10))
+
+        # 结果概览。这是正常审核状态的一部分，不是错误提示：
+        # 「0 条可直接确认」既可能是正常结果，也可能是发言人信息不足，所以只做说明、不报警。
+        n_conf = len(result.get("confirmed_tasks", []))
+        n_pend = len(result.get("needs_confirmation", []))
+        tk.Label(self, text=f"{n_conf} 条可直接确认 · {n_pend} 条待确认",
+                 bg=color_bg, fg="#89b4fa", font=("Microsoft YaHei UI", 10, "bold"),
+                 anchor="w").pack(fill="x", padx=14, pady=(0, 4))
+
+        if n_conf == 0 and n_pend == 0:
+            tip = "未识别到需要你处理的任务。"
+        elif n_conf == 0 and mode == "local":
+            tip = ("离线整理只做逐行拆分，判断不了负责人和责任归属，所以没有可直接确认的任务。\n"
+                   "请核对待确认事项；想要更准确的判断，可以在主窗口 ⚙ 里配好 API Key 后再整理。")
+        elif n_conf == 0 and perspective == VIEW_UNKNOWN:
+            tip = ("这段消息的发言者尚不明确，部分任务无法确定责任归属。\n"
+                   "请核对待确认事项，或补充消息视角后重新整理。")
+        elif n_conf == 0:
+            tip = "本次没有可以直接确认的任务，责任依据不足的事项都列在下面，请逐条核对。"
+        elif mode == "ai":
+            tip = "有原文依据的明确任务默认勾选；待确认事项默认不勾选。"
+        else:
+            tip = "离线模式无法判断负责人或理解语义；以下仅是原文片段，全部默认不勾选。"
+        tk.Label(self, text=tip, bg=color_bg, fg="#a6adc8", anchor="w",
+                 justify="left", wraplength=630).pack(fill="x", padx=14, pady=(0, 10))
 
         container = tk.Frame(self, bg=color_bg)
         container.pack(fill="both", expand=True, padx=10)

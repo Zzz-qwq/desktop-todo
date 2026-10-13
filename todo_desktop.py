@@ -1064,7 +1064,8 @@ class AiDialog(tk.Toplevel):
         self.btn_go.config(state="normal")
         n = len(candidates["confirmed_tasks"]) + len(candidates["needs_confirmation"])
         self.status.config(text=f"识别到 {n} 项候选；审核后才会加入待办", fg=GREEN)
-        CandidateReviewDialog(self.app, candidates, "ai" if using_ai else "local", self.owner_var.get().strip())
+        CandidateReviewDialog(self.app, candidates, "ai" if using_ai else "local",
+                              self.owner_var.get().strip(), self.view_var.get())
     def _fail(self, err):
         self.btn_go.config(state="normal")
         self.status.config(text=f"出错：{err}", fg=RED)
